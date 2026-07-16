@@ -3,7 +3,8 @@ const { Pool } = require('pg');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+app.set('trust proxy', true);
+app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '10mb' }));
 
 const pool = new Pool({
@@ -11,7 +12,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Init tables
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vendors (
@@ -24,19 +24,52 @@ async function initDB() {
       data JSONB NOT NULL,
       updated_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    INSERT INTO settings (key, value) VALUES ('invoice_counter', '0') ON CONFLICT DO NOTHING;
   `);
   console.log('DB ready');
 }
 
-// GET all vendors
+// Health check
+app.get('/', (req, res) => res.json({ ok: true, service: 'SPRG2026 API' }));
+
+// ── Invoice Counter ────────────────────────────────────────────────────────────
+app.get('/invoice/next', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `UPDATE settings SET value = (value::int + 1)::text WHERE key = 'invoice_counter' RETURNING value`
+    );
+    const num = String(r.rows[0].value).padStart(3, '0');
+    res.json({ ok: true, number: `${num}/2026` });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/invoice/current', async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT value FROM settings WHERE key = 'invoice_counter'`);
+    res.json({ ok: true, value: parseInt(r.rows[0].value) });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/invoice/reset', async (req, res) => {
+  try {
+    const val = req.body.value ?? 0;
+    await pool.query(`UPDATE settings SET value = $1 WHERE key = 'invoice_counter'`, [String(val)]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ── Vendors ───────────────────────────────────────────────────────────────────
 app.get('/vendors', async (req, res) => {
   try {
-    const r = await pool.query('SELECT data FROM vendors ORDER BY data->>\'brand\'');
+    const r = await pool.query(`SELECT data FROM vendors ORDER BY data->>'brand'`);
     res.json({ ok: true, data: r.rows.map(r => r.data) });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// POST upsert vendor
 app.post('/vendors', async (req, res) => {
   try {
     const v = req.body;
@@ -49,22 +82,17 @@ app.post('/vendors', async (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// POST bulk write vendors
 app.post('/vendors/bulk', async (req, res) => {
   try {
     const { data } = req.body;
     await pool.query('DELETE FROM vendors');
     for (const v of data) {
-      await pool.query(
-        `INSERT INTO vendors (id, data) VALUES ($1, $2)`,
-        [v.id, v]
-      );
+      await pool.query(`INSERT INTO vendors (id, data) VALUES ($1, $2)`, [v.id, v]);
     }
     res.json({ ok: true, count: data.length });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// DELETE vendor
 app.delete('/vendors/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM vendors WHERE id = $1', [req.params.id]);
@@ -72,15 +100,14 @@ app.delete('/vendors/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// GET all PL entries
+// ── PL Entries ────────────────────────────────────────────────────────────────
 app.get('/pl', async (req, res) => {
   try {
-    const r = await pool.query('SELECT data FROM pl_entries ORDER BY data->>\'date\'');
+    const r = await pool.query(`SELECT data FROM pl_entries ORDER BY data->>'date'`);
     res.json({ ok: true, data: r.rows.map(r => r.data) });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// POST upsert PL entry
 app.post('/pl', async (req, res) => {
   try {
     const e = req.body;
@@ -93,22 +120,17 @@ app.post('/pl', async (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// POST bulk write PL
 app.post('/pl/bulk', async (req, res) => {
   try {
     const { data } = req.body;
     await pool.query('DELETE FROM pl_entries');
     for (const e of data) {
-      await pool.query(
-        `INSERT INTO pl_entries (id, data) VALUES ($1, $2)`,
-        [e.id, e]
-      );
+      await pool.query(`INSERT INTO pl_entries (id, data) VALUES ($1, $2)`, [e.id, e]);
     }
     res.json({ ok: true, count: data.length });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// DELETE PL entry
 app.delete('/pl/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM pl_entries WHERE id = $1', [req.params.id]);
@@ -116,10 +138,5 @@ app.delete('/pl/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// Health check
-app.get('/', (req, res) => res.json({ ok: true, service: 'SPRG2026 API' }));
-
 const PORT = process.env.PORT || 3000;
-initDB().then(() => {
-  app.listen(PORT, () => console.log(`API running on port ${PORT}`));
-});
+initDB().then(() => app.listen(PORT, () => console.log(`API running on port ${PORT}`)));
