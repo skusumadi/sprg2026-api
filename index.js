@@ -33,10 +33,9 @@ async function initDB() {
   console.log('DB ready');
 }
 
-// Health check
-app.get('/', (req, res) => res.json({ ok: true, service: 'SPRG2026 API' }));
+app.get('/', (req, res) => res.json({ ok: true, service: 'SPRG2026 API v2' }));
 
-// ── Invoice Counter ────────────────────────────────────────────────────────────
+// ── Invoice Counter ───────────────────────────────────────────────────────────
 app.get('/invoice/next', async (req, res) => {
   try {
     const r = await pool.query(
@@ -44,13 +43,6 @@ app.get('/invoice/next', async (req, res) => {
     );
     const num = String(r.rows[0].value).padStart(3, '0');
     res.json({ ok: true, number: `${num}/2026` });
-  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-
-app.get('/invoice/current', async (req, res) => {
-  try {
-    const r = await pool.query(`SELECT value FROM settings WHERE key = 'invoice_counter'`);
-    res.json({ ok: true, value: parseInt(r.rows[0].value) });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
